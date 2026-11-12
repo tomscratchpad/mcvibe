@@ -172,21 +172,29 @@ branch `agent/fix-login`. It appears as `sbx-fix-login` in the Herdr app.
 
 ```shell
 cd ~/src/my-app
-sbx create fix-login                 # ready in a few seconds; deleted automatically after 8 h
+sbx create fix-login            # ready in a few seconds; deleted automatically after 8 h
 ```
+![example](docs/img/create.png)
 
-**2. Start Claude Code.** In the Herdr app, open a space on `sbx-fix-login` and start
-Claude Code in `/workspace/repo`. The first time, run `/login` and finish sign-in in
-your own browser. From a terminal instead:
+**2. Claude Code Starts.** In the Herdr app, open a space on `sbx-fix-login` and Claude Code starts in `/workspace/repo`. The first time, run `/login` and finish sign-in in
+your own browser.
 
-```shell
-hc run --on sbx-fix-login --bg claude "Fix the login redirect bug"
-```
+![example](docs/img/remote_sandbox.png)
 
 **3. Steer it.** Run several sandboxes in parallel, type follow-up prompts, attach and
 detach. Close the laptop: agents keep running. From another computer: `sbx connect fix-login`.
 
 **4. Get the work back and finish.**
+
+Delete the sandbox and the changed files are pulled to the local branch on your laptop:
+
+```shell
+sbx delete fix-login
+```
+
+![example](docs/img/delete.png)
+
+Or you can pull or push it manually if you need them on your laptop:
 
 ```shell
 sbx pull fix-login                   # optional, any time: → local branch sbx/fix-login
@@ -228,6 +236,8 @@ Full guide and troubleshooting: [docs/developer-guide.md](docs/developer-guide.m
 | **devbox image** | What every sandbox runs: Claude Code, herdr-core, rtk, git | Every input pinned by digest or checksum; no SSH | [image/devbox/](image/devbox/README.md) |
 | **rtk** (token savings) | Cuts the tokens the agent spends reading command output. A Claude Code hook rewrites each shell command (`git status` → `rtk git status`), and the model receives a condensed result (failing tests, changed files, lint errors) instead of the full output. Lowers cost and helps long sessions stay within context and plan limits | Open-source `rtk-oss` edition, pinned by checksum; the hook lives in managed settings so a repo cannot remove it; project filter files ignored (a repo could hide failing tests); deny rules written to match the rewritten commands | [image/devbox/ § rtk](image/devbox/README.md#rtk-token-savings) |
 | **sbx CLI** | Create, list, exec, pull, delete; Herdr transport | Go, client-go, exec API only | [cli/](cli/README.md) |
+
+![LiteLLM UI](docs/img/litellm.png)
 
 ### Built vs reused
 
