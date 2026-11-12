@@ -1,0 +1,32 @@
+Copyright (c) 2026 tom. All rights reserved.
+
+This repository and its contents (source code, configuration, scripts,
+documentation and diagrams) are proprietary. No license is granted, expressly
+or by implication, to use, copy, modify, merge, publish, distribute,
+sublicense, sell, or create derivative works of any part of it, in whole or in
+part, for any purpose, including training or evaluating machine-learning
+models.
+
+Sole exception: the recipients to whom the author submitted this repository as
+part of a hiring process may view and run it, for the sole purpose of
+evaluating that application, until the process ends. This permission is
+personal, non-transferable and revocable, and grants no other right.
+
+Viewing or forking this repository on GitHub, as permitted by GitHub's Terms
+of Service, grants no right beyond what those terms require.
+
+Third-party material keeps its own license and is NOT covered by the above:
+  - k8s/policies/20-vap-secure-sandbox.yaml is adapted from
+    kubernetes-sigs/agent-sandbox (Apache License 2.0);
+  - image/testing/Dockerfile is from kubernetes-sigs/agent-sandbox
+    (Apache License 2.0, notice kept in the file);
+  - upstream software installed or referenced by this repository (k3s,
+    agent-sandbox, gVisor, Kata Containers, Envoy, LiteLLM, PostgreSQL,
+    Claude Code, Herdr, rtk, Go modules listed in cli/go.mod) is governed by
+    the licenses of those projects.
+
+THE CONTENTS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY CLAIM, DAMAGES OR
+OTHER LIABILITY ARISING FROM THE CONTENTS OR THEIR USE.
+
+For any other use, contact the author for written permission.
