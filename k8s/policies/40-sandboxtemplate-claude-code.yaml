@@ -78,7 +78,7 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
       - name: agent
-        image: localhost:5000/devbox:2
+        image: localhost:5000/devbox:3
         env:
         # Routing for every process in the session (Claude Code, git, npm, curl):
         # model API -> LiteLLM; everything else -> allowlisting egress proxy.

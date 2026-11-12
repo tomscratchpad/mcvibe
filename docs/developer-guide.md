@@ -56,8 +56,9 @@ copied. The sandbox has no GitHub access and no git credentials. It appears as
 `/workspace/repo`.
 
 **2. Start an agent.** In the app, open a **space** on `sbx-fix-login` and start
-a terminal or Claude Code there. Terminals run *inside the sandbox*, not on
-your laptop. From a terminal instead:
+a terminal there: it starts Claude Code in `/workspace/repo` (exit Claude to get
+a shell in the same terminal; `SBX_NO_CLAUDE=1` turns this off). Terminals run
+*inside the sandbox*, not on your laptop. From a terminal instead:
 
 ```shell
 hc run --on sbx-fix-login --bg claude "Fix the login redirect bug"

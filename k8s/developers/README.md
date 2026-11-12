@@ -57,7 +57,7 @@ is the PR removing it, plus deleting the namespace.
 | Namespace | labels `agent-platform/sessions=true` (PSA `restricted`, existing secure-sandbox and session-pod VAPs, LiteLLM and egress-proxy ingress), `agent-platform/tenant=developer` (owner VAPs). Annotation `agent-platform/owner-username` |
 | ResourceQuota + LimitRange | per-person cap: 2 pods, 4 CPU / 4 GiB limits, no PVC/LB/NodePort. With one namespace per developer, the quota is a per-person spend and blast-radius limit |
 | NetworkPolicy `default-deny` | non-template pods get no network |
-| SandboxTemplate + WarmPool `claude-code` | same as the platform template (`k8s/policies/40-…`): gVisor, egress only to DNS, LiteLLM and the egress proxy. Image `localhost:5000/devbox:2` |
+| SandboxTemplate + WarmPool `claude-code` | same as the platform template (`k8s/policies/40-…`): gVisor, egress only to DNS, LiteLLM and the egress proxy. Image `localhost:5000/devbox:3` |
 | ConfigMap `claude-code-managed-settings` | same managed Claude Code settings as `agent-sessions` |
 | RoleBinding `sandbox-developer` | ClusterRole → this one user, this namespace only |
 

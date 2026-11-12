@@ -78,6 +78,41 @@ RUN getent passwd 1000 >/dev/null || useradd -m -u 1000 python; \
   && chown -R 1000:1000 /workspace /home/python/.claude \
   && chmod 700 /home/python
 
+# Herdr terminals start Claude Code (herdr-claude.sh, sourced from the
+# platform-owned /etc/bash.bashrc, so ~/.bashrc edits cannot drop it).
+# herdr-core would otherwise open /bin/sh (dash, which reads no bashrc):
+# its config.toml `shell` sets the shell for its terminals only, leaving
+# $SHELL, the login shell and every non-interactive exec (sbx push/pull,
+# herdr-core transport) unchanged.
+# The directory is created first: COPY --chmod would also apply 0644 to a
+# parent it creates, leaving it untraversable (no x bit).
+RUN install -d -m 0755 /usr/local/lib/devbox
+COPY --chmod=0644 herdr-claude.sh /usr/local/lib/devbox/herdr-claude.sh
+RUN printf '\n# devbox: Herdr terminals start Claude Code\n. /usr/local/lib/devbox/herdr-claude.sh\n' >> /etc/bash.bashrc \
+  && mkdir -p /home/python/.config/herdr-core \
+  && printf 'shell = ["bash"]\n' > /home/python/.config/herdr-core/config.toml \
+  && chown -R 1000:1000 /home/python/.config
+
+# Claude Code first run: no theme picker / onboarding, and the sandbox's
+# folders already trusted. Sign-in (/login) is still per sandbox. Trust only
+# skips the dialog: managed settings still ignore a repo's hooks and
+# permission rules (allowManagedHooksOnly, allowManagedPermissionRulesOnly).
+# User-level files: the developer can still change the theme (/config).
+RUN printf '%s\n' \
+    '{' \
+    '  "hasCompletedOnboarding": true,' \
+    "  \"lastOnboardingVersion\": \"${CLAUDE_CODE_VERSION}\"," \
+    '  "projects": {' \
+    '    "/workspace": { "hasTrustDialogAccepted": true },' \
+    '    "/workspace/repo": { "hasTrustDialogAccepted": true }' \
+    '  }' \
+    '}' > /home/python/.claude.json \
+  && printf '{\n  "theme": "dark"\n}\n' > /home/python/.claude/settings.json \
+  && node -e 'for (const f of process.argv.slice(1)) JSON.parse(require("fs").readFileSync(f))' \
+       /home/python/.claude.json /home/python/.claude/settings.json \
+  && chown 1000:1000 /home/python/.claude.json /home/python/.claude/settings.json \
+  && chmod 600 /home/python/.claude.json
+
 # The base image's CMD is "uvicorn main:app ..." which imports main from /app;
 # WORKDIR moves to /workspace for agent work, so keep /app importable.
 ENV PYTHONPATH=/app

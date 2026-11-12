@@ -12,6 +12,8 @@
 #  - deny rules are guardrails, not a boundary (Bash can always obfuscate).
 #    They use *...* because the rtk hook rewrites commands before rules are
 #    checked: `git push` -> `rtk git push`, `cat f` -> `rtk read f`.
+#  - CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL: no plugin marketplace
+#    download at startup (the egress proxy blocks it; it would retry every 2 h).
 #  - forceLoginMethod claudeai: subscription sign-in only. Production also sets
 #    forceLoginOrgUUID to the company's Claude organization.
 # rtk (image/devbox): PreToolUse hook on Bash rewrites shell commands to their
@@ -33,6 +35,7 @@ data:
         "DISABLE_TELEMETRY": "1",
         "DISABLE_AUTOUPDATER": "1",
         "ENABLE_CLAUDEAI_MCP_SERVERS": "false",
+        "CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL": "1",
         "RTK_TELEMETRY_DISABLED": "1",
         "RTK_SUPPRESS_HOOK_WARNING": "1"
       },

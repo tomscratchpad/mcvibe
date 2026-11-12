@@ -43,6 +43,11 @@ malicious code, or call internal systems.
   override user and project settings, so a malicious repo's `.claude/settings.json`
   cannot change the model endpoint, proxy, or telemetry settings. Even if it did,
   NetworkPolicy leaves nowhere else to go.
+- **[demo]** `/workspace` and `/workspace/repo` are pre-trusted in the image
+  (no trust dialog). Accepted: the dialog asks a human whether to load the
+  repo's project settings, but here managed settings already drop its hooks and
+  permission rules, project MCP servers still need approval, and the agent can
+  run arbitrary commands in the sandbox anyway. The sandbox is the boundary.
 - **[demo]** Permission modes (managed settings): inside the sandbox the agent
   runs commands and edits freely (`acceptEdits` + `Bash` allowed), because the
   sandbox is the boundary. Bypass mode is disabled. Deny rules cover the OAuth

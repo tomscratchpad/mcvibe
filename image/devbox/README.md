@@ -11,8 +11,8 @@ exec API.
 
 ```shell
 cd image/devbox
-sg docker -c 'docker buildx build . -t localhost:5000/devbox:2 --load'   # or: newgrp docker
-sg docker -c 'docker push localhost:5000/devbox:2'
+sg docker -c 'docker buildx build . -t localhost:5000/devbox:3 --load'   # or: newgrp docker
+sg docker -c 'docker push localhost:5000/devbox:3'
 ```
 
 Tags are immutable: every change gets a new tag, and templates are bumped
@@ -20,7 +20,8 @@ explicitly. Running sandboxes keep their image until they are recreated.
 
 | Tag | Digest | Change |
 |---|---|---|
-| `devbox:2` (current) | `sha256:b94fe3702e6d0e1427d2599b522daec75b8861683faf65f144acf50d8fbb9465` | + rtk 1.1.0 |
+| `devbox:3` (current) | `sha256:dc5dc5ee41f0bed944c71be4e3ac7d32de6221a0326d61de44b6c712ca7dacc5` | Herdr terminals start Claude Code; no theme picker; `/workspace` trusted |
+| `devbox:2` | `sha256:b94fe3702e6d0e1427d2599b522daec75b8861683faf65f144acf50d8fbb9465` | + rtk 1.1.0 |
 | `devbox:1` | `sha256:178b820316a92261a2baaae7354cbbfd0f7812465edbf6399fcc8f10f3c4b1b4` | initial: Claude Code, herdr-core |
 The pod VAP allows any `localhost:5000/` image.
 
@@ -60,6 +61,39 @@ sandbox, which is unpinned and unreviewed. `sbx` never passes `--install`.
 Verified on the cluster (gVisor): `hc machine add --via …` connects; `hc run`
 starts a terminal; `herdr-core serve` (PID 10) and the terminal survive the
 exec stream closing, and a new connection reads the same terminal.
+
+### Herdr terminals start Claude Code
+
+A terminal opened in the Herdr app starts `claude` in `/workspace/repo`; when
+Claude exits, the terminal is an ordinary bash. `sbx shell` and `kubectl exec`
+stay plain shells.
+
+| Piece | Why |
+|---|---|
+| `herdr-claude.sh`, sourced at the end of `/etc/bash.bashrc` | Platform-owned: editing `~/.bashrc` cannot remove it. Runs only for interactive bash with `HC_TERMINAL_ID` set (herdr-core sets it in every terminal it runs) |
+| `~/.config/herdr-core/config.toml`: `shell = ["bash"]` | herdr-core would otherwise open `/bin/sh` (dash, no bashrc). Applies to herdr-core terminals only: `$SHELL` and the login shell are unchanged |
+| `SBX_CLAUDE_AUTOSTARTED` | Exported before starting Claude: once per terminal, not again in a nested `bash` |
+| `SBX_NO_CLAUDE=1` | Opt out |
+
+Unaffected: the pod's command (runtime API), and every non-interactive exec:
+`sbx push`/`pull`, the herdr-core transport (`sh -c … herdr-core connect`),
+Claude's own Bash tool.
+
+### Claude Code first run
+
+`~/.claude.json` ships with onboarding completed (no theme picker) and
+`/workspace` and `/workspace/repo` already trusted; `~/.claude/settings.json`
+sets the dark theme (change it with `/config`). `/login` is still needed once
+per sandbox. Skipping the trust dialog does not loosen anything a repository
+can do: managed settings already ignore its hooks and permission rules, and
+the sandbox is the boundary (see `docs/threat-model.md` § 1).
+
+Verified with a fresh `HOME` in a Herdr terminal: without these files Claude
+opens on the theme picker; with them it opens straight on the prompt in
+`/workspace/repo`. Managed settings also set
+`CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL=1`: otherwise every start
+tries to download the plugin marketplace, the egress proxy blocks it, and
+Claude schedules a retry 2 h later.
 
 ## rtk: token savings
 

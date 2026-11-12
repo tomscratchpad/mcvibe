@@ -115,6 +115,9 @@ spec:
 EOF
 
 echo "== Setup: outsider pod, one session claim"
+# The outsider lives in a plain namespace (no session labels, no NetworkPolicy),
+# standing in for any other workload on the cluster. Created here, idempotently.
+kubectl create namespace $OUT_NS --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 # Remove leftovers from a previous run and wait, so we never re-use a terminating pod.
 kubectl -n $NS delete sandboxclaim nettest --ignore-not-found --wait=true >/dev/null
 kubectl -n $OUT_NS delete pod outsider --ignore-not-found --wait=true >/dev/null
