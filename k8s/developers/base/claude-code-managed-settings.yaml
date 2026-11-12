@@ -1,0 +1,74 @@
+# Copy of k8s/policies/41-claude-code-managed-settings.yaml (keep in sync).
+# Claude Code managed settings for every session, mounted read-only at
+# /etc/claude-code/managed-settings.json by the claude-code template.
+# Managed settings have the highest precedence: user settings and a repository's
+# .claude/settings.json cannot override them (a cloned repo is untrusted input).
+# Permissions (rationale in k8s/policies/README.md "Permission modes"):
+#  - acceptEdits + Bash allowed: the agent works autonomously inside the
+#    sandbox; the sandbox (gVisor, NetworkPolicy, egress allowlist) is the
+#    boundary, not per-command prompts.
+#  - bypassPermissions disabled; only these managed rules and hooks apply
+#    (a cloned repo's .claude/settings.json cannot add allow rules or hooks).
+#  - deny rules are guardrails, not a boundary (Bash can always obfuscate).
+#    They use *...* because the rtk hook rewrites commands before rules are
+#    checked: `git push` -> `rtk git push`, `cat f` -> `rtk read f`.
+#  - forceLoginMethod claudeai: subscription sign-in only. Production also sets
+#    forceLoginOrgUUID to the company's Claude organization.
+# rtk (image/devbox): PreToolUse hook on Bash rewrites shell commands to their
+# token-compressed rtk form. Set here (not via `rtk init`) so it is
+# platform-owned; a no-op on images without rtk (e.g. devbox:1). Project-level rtk filters stay untrusted (RTK_TRUST_PROJECT_FILTERS
+# unset): a repo could otherwise ship filters that hide output from the agent.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: claude-code-managed-settings
+data:
+  managed-settings.json: |
+    {
+      "env": {
+        "ANTHROPIC_BASE_URL": "http://litellm.llm-gateway.svc.cluster.local:4000",
+        "HTTPS_PROXY": "http://egress-proxy.egress-proxy.svc.cluster.local:3128",
+        "NO_PROXY": "localhost,127.0.0.1,.svc,.svc.cluster.local",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+        "DISABLE_TELEMETRY": "1",
+        "DISABLE_AUTOUPDATER": "1",
+        "ENABLE_CLAUDEAI_MCP_SERVERS": "false",
+        "RTK_TELEMETRY_DISABLED": "1",
+        "RTK_SUPPRESS_HOOK_WARNING": "1"
+      },
+      "hooks": {
+        "PreToolUse": [
+          { "matcher": "Bash", "hooks": [ { "type": "command", "command": "if command -v rtk >/dev/null 2>&1; then exec rtk hook claude; fi" } ] }
+        ]
+      },
+      "permissions": {
+        "defaultMode": "acceptEdits",
+        "allow": ["Bash"],
+        "deny": [
+          "Read(~/.claude/.credentials.json)",
+          "Edit(~/.claude/.credentials.json)",
+          "Bash(*.credentials.json*)",
+          "Bash(*git push*)",
+          "WebFetch",
+          "WebSearch",
+          "RemoteTrigger"
+        ],
+        "disableBypassPermissionsMode": "disable"
+      },
+      "allowManagedPermissionRulesOnly": true,
+      "allowManagedHooksOnly": true,
+      "forceLoginMethod": "claudeai",
+      "skipWebFetchPreflight": true,
+      "disableClaudeAiConnectors": true
+    }
+  # Managed memory (/etc/claude-code/CLAUDE.md): loaded in every session, cannot be
+  # removed by a repository. Text from `rtk init` (rtk 1.1.0 RTK.md).
+  CLAUDE.md: |
+    # Command output
+
+    Command output here is condensed to save tokens, keeping every signal and
+    dropping costly noise. Treat it as the complete result: run commands
+    normally, and batch related commands into one call to avoid extra turns.
+    Truncated results state their recovery path in their own output. Re-run a
+    command as `rtk bypass <cmd>` only when its result is unusable: empty when
+    output was clearly expected, contradicting its exit code, or garbled.

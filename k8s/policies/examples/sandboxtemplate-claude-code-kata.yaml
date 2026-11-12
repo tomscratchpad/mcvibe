@@ -1,0 +1,100 @@
+# EXAMPLE, not applied by `kubectl apply -f .` (subdirectory).
+# Same session template on Kata Containers (one microVM per session) for
+# workloads that need a hardware-virtualization boundary. Requires KVM on the
+# node. Apply with its warm pool:  kubectl apply -f examples/
+# Identical to ../40-sandboxtemplate-claude-code.yaml except name + runtimeClassName.
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxTemplate
+metadata:
+  name: claude-code-kata
+  namespace: agent-sessions
+spec:
+  networkPolicyManagement: Managed
+  networkPolicy:
+    ingress:
+    - from:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: agent-sandbox-system
+        podSelector:
+          matchLabels:
+            app: sandbox-router
+    egress:
+    - to:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: kube-system
+        podSelector:
+          matchLabels:
+            k8s-app: kube-dns
+      ports:
+      - { protocol: UDP, port: 53 }
+      - { protocol: TCP, port: 53 }
+    - to:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: llm-gateway
+        podSelector:
+          matchLabels:
+            app.kubernetes.io/name: litellm
+      ports:
+      - { protocol: TCP, port: 4000 }
+    - to:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: egress-proxy
+        podSelector:
+          matchLabels:
+            app.kubernetes.io/name: egress-proxy
+      ports:
+      - { protocol: TCP, port: 3128 }
+  # Retain: a failed/evicted pod is kept for forensics, not silently replaced
+  # with a fresh one (the session state lives in the pod).
+  failedPodPolicy: Retain
+  envVarsInjectionPolicy: Disallowed
+  volumeClaimTemplatesPolicy: Disallowed
+  podTemplate:
+    spec:
+      runtimeClassName: kata
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+      - name: agent
+        image: localhost:5000/devbox:2
+        env:
+        # Routing for every process in the session (Claude Code, git, npm, curl):
+        # model API -> LiteLLM; everything else -> allowlisting egress proxy.
+        - { name: ANTHROPIC_BASE_URL, value: "http://litellm.llm-gateway.svc.cluster.local:4000" }
+        - { name: HTTPS_PROXY, value: "http://egress-proxy.egress-proxy.svc.cluster.local:3128" }
+        - { name: https_proxy, value: "http://egress-proxy.egress-proxy.svc.cluster.local:3128" }
+        - { name: NO_PROXY, value: "localhost,127.0.0.1,.svc,.svc.cluster.local" }
+        - { name: no_proxy, value: "localhost,127.0.0.1,.svc,.svc.cluster.local" }
+        volumeMounts:
+        - { name: claude-managed-settings, mountPath: /etc/claude-code, readOnly: true }
+        ports:
+        - { name: runtime, containerPort: 8888 }
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities: { drop: ["ALL"] }
+        resources:
+          requests: { cpu: 500m, memory: 1Gi, ephemeral-storage: 2Gi }
+          limits:   { cpu: "2",  memory: 2Gi, ephemeral-storage: 8Gi }
+      volumes:
+      - name: claude-managed-settings
+        configMap: { name: claude-code-managed-settings }
+---
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxWarmPool
+metadata:
+  name: claude-code-kata
+  namespace: agent-sessions
+spec:
+  replicas: 0
+  sandboxTemplateRef:
+    name: claude-code-kata

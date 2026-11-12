@@ -1,0 +1,41 @@
+# Pod-level backstop for the agent-sessions namespace. The Sandbox policy only
+# sees Sandbox/SandboxTemplate objects; anyone who can create Pods directly (or
+# a future controller bug) would bypass it. PSA "restricted" covers most pod
+# hardening, but not the runtime class or the image source, so this does.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: session-pod-policy
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups:   [""]
+      apiVersions: ["v1"]
+      operations:  ["CREATE", "UPDATE"]
+      resources:   ["pods"]
+  variables:
+    - name: allContainers
+      expression: >-
+        object.spec.containers +
+        (has(object.spec.initContainers) ? object.spec.initContainers : []) +
+        (has(object.spec.ephemeralContainers) ? object.spec.ephemeralContainers : [])
+  validations:
+    - expression: "has(object.spec.runtimeClassName) && object.spec.runtimeClassName in ['gvisor', 'kata']"
+      message: "Pods in agent session namespaces must run under runtimeClassName gvisor or kata."
+    # Demo: only the local registry. Production: internal registry, images
+    # pinned by digest and signature-verified (e.g. sigstore policy-controller).
+    - expression: "variables.allContainers.all(c, c.image.startsWith('localhost:5000/'))"
+      message: "Images must come from the platform registry (localhost:5000/)."
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: session-pod-binding
+spec:
+  policyName: session-pod-policy
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        agent-platform/sessions: "true"

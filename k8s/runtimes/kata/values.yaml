@@ -1,0 +1,22 @@
+# kata-deploy Helm values for a single-node k3s cluster.
+# Chart: oci://ghcr.io/kata-containers/kata-deploy-charts/kata-deploy --version 4.3.1
+#
+# Decisions:
+#  - deploymentMode "job" (chart default): install runs as one-shot per-node Jobs,
+#    so no privileged DaemonSet stays resident on the node.
+#  - Only the default Rust runtime + QEMU shim is installed (smaller attack surface,
+#    less disk). Exposed as RuntimeClass "kata" (plus "kata-qemu-runtime-rs").
+k8sDistribution: k3s
+
+shims:
+  disableAll: true
+  qemu-runtime-rs:
+    enabled: true
+
+defaultShim:
+  amd64: qemu-runtime-rs
+
+runtimeClasses:
+  enabled: true
+  createDefault: true
+  defaultName: kata

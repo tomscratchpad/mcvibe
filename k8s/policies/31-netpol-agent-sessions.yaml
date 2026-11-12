@@ -1,0 +1,14 @@
+# Namespace-wide default deny for agent-sessions. The controller-generated
+# per-template policies (<template>-network-policy) only select pods created
+# from a SandboxTemplate; this catches everything else (e.g. a bare Sandbox),
+# so no pod in the namespace ever has unrestricted network access.
+# NetworkPolicies are additive allow-lists, so template pods still get exactly
+# their template's rules.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: agent-sessions
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]

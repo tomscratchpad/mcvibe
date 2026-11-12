@@ -1,0 +1,154 @@
+# LiteLLM gateway + its Postgres. Namespace and the session-facing
+# NetworkPolicies come from ../policies (00-namespaces, 30-netpol-llm-gateway).
+# Secrets (master key, salt key, DB password) are created by install.sh,
+# never committed.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: llm-gateway
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: postgres }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: postgres }
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70          # postgres user in the alpine image
+        runAsGroup: 70
+        fsGroup: 70
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+      - name: postgres
+        # postgres:17.10-alpine, pinned by digest
+        image: docker.io/library/postgres@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
+        env:
+        - { name: POSTGRES_DB, value: litellm }
+        - { name: POSTGRES_USER, value: litellm }
+        - name: POSTGRES_PASSWORD
+          valueFrom: { secretKeyRef: { name: postgres, key: password } }
+        - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+        ports: [ { name: postgres, containerPort: 5432 } ]
+        readinessProbe:
+          exec: { command: ["pg_isready", "-U", "litellm", "-d", "litellm"] }
+          periodSeconds: 10
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities: { drop: ["ALL"] }
+        resources:
+          requests: { cpu: 100m, memory: 128Mi }
+          limits:   { cpu: "1",  memory: 512Mi }
+        volumeMounts:
+        - { name: data, mountPath: /var/lib/postgresql/data }
+        - { name: run,  mountPath: /var/run/postgresql }
+      volumes:
+      - name: run
+        emptyDir: {}
+  volumeClaimTemplates:
+  - metadata: { name: data }
+    spec:
+      accessModes: [ReadWriteOnce]
+      resources: { requests: { storage: 2Gi } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: llm-gateway
+spec:
+  selector: { app.kubernetes.io/name: postgres }
+  ports: [ { port: 5432, targetPort: 5432 } ]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: litellm
+  namespace: llm-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: litellm }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: litellm }
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+      - name: litellm
+        # ghcr.io/berriai/litellm-non_root:v1.106.6 (2026-10-28), pinned by digest
+        image: ghcr.io/berriai/litellm-non_root@sha256:6363e53f135dafbf4a68fac25f77aec3f2b99be37665e8c5f623a952637c220b
+        args: ["--config", "/etc/litellm/config.yaml", "--port", "4000", "--num_workers", "1"]
+        env:
+        - name: LITELLM_MASTER_KEY
+          valueFrom: { secretKeyRef: { name: litellm, key: master-key } }
+        - name: LITELLM_SALT_KEY          # encrypts credentials stored in the DB
+          valueFrom: { secretKeyRef: { name: litellm, key: salt-key } }
+        - name: DATABASE_URL
+          valueFrom: { secretKeyRef: { name: litellm, key: database-url } }
+        # All provider traffic leaves through the egress proxy's gateway listener.
+        - { name: HTTPS_PROXY, value: "http://egress-proxy.egress-proxy.svc.cluster.local:3129" }
+        - { name: NO_PROXY, value: "localhost,127.0.0.1,.svc,.svc.cluster.local" }
+        # Admin UI on /ui: reachable only via kubectl port-forward (no Ingress); login = master key. See README "Admin UI".
+        - { name: LITELLM_TELEMETRY, value: "False" }
+        # Use the price map bundled in the pinned image; don't fetch it from GitHub at startup.
+        - { name: LITELLM_LOCAL_MODEL_COST_MAP, value: "True" }
+        - { name: LITELLM_LOG, value: "INFO" }
+        - { name: JSON_LOGS, value: "True" }
+        ports: [ { name: http, containerPort: 4000 } ]
+        readinessProbe:
+          httpGet: { path: /health/readiness, port: 4000 }
+          periodSeconds: 10
+          failureThreshold: 3
+        startupProbe:
+          httpGet: { path: /health/liveliness, port: 4000 }
+          periodSeconds: 5
+          failureThreshold: 60
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities: { drop: ["ALL"] }
+        resources:
+          requests: { cpu: 250m, memory: 512Mi }
+          limits:   { cpu: "2",  memory: 1536Mi }
+        volumeMounts:
+        - { name: config, mountPath: /etc/litellm, readOnly: true }
+      volumes:
+      - name: config
+        configMap: { name: litellm-config }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: litellm
+  namespace: llm-gateway
+spec:
+  selector: { app.kubernetes.io/name: litellm }
+  ports: [ { name: http, port: 4000, targetPort: 4000 } ]
+---
+# Postgres: reachable only by LiteLLM, no egress at all.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres
+  namespace: llm-gateway
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: postgres }
+  policyTypes: [Ingress, Egress]
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels: { app.kubernetes.io/name: litellm }
+    ports: [ { protocol: TCP, port: 5432 } ]
+  egress: []

@@ -1,0 +1,31 @@
+# What a developer may do with their sandboxes. A ClusterRole so it is defined
+# once; it grants nothing until a RoleBinding in a developer's own namespace
+# (base/rolebinding.yaml) binds it, so every right below is scoped to that one
+# namespace. That is what isolates developers from each other.
+#
+#  - SandboxClaims: create/list/delete their own sessions. Never Sandboxes,
+#    SandboxTemplates, WarmPools or Pods: the pod spec, image, runtime and
+#    network policy stay platform-owned.
+#  - Sandboxes/Pods read-only: resolve claim -> pod.
+#  - pods/exec: the only remote-access path (`sbx exec` / `sbx shell`, and
+#    herdr-core's transport). get = WebSocket exec (k8s >= 1.30), create = SPDY.
+#
+# Not granted: pods/attach, pods/portforward, pods/log, secrets, configmaps,
+# services, networkpolicies, namespaces, anything cluster-scoped.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: sandbox-developer
+rules:
+- apiGroups: ["extensions.agents.x-k8s.io"]
+  resources: ["sandboxclaims"]
+  verbs: ["create", "get", "list", "delete"]
+- apiGroups: ["agents.x-k8s.io"]
+  resources: ["sandboxes"]
+  verbs: ["get", "list"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+- apiGroups: [""]
+  resources: ["pods/exec"]
+  verbs: ["create", "get"]

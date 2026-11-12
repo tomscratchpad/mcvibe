@@ -1,0 +1,10 @@
+# containerd 2.x (config schema v3) drop-in, imported by k3s from
+# /var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.d/
+version = 3
+
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runsc]
+  runtime_type = 'io.containerd.runsc.v1'
+
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runsc.options]
+  TypeUrl = 'io.containerd.runsc.v1.options'
+  ConfigPath = '/etc/gvisor/runsc.toml'

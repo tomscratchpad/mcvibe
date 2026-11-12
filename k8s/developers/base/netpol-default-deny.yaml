@@ -1,0 +1,9 @@
+# Anything not created from the platform template gets no network at all.
+# Template pods get exactly the template's managed policy (DNS, LiteLLM, egress proxy).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]

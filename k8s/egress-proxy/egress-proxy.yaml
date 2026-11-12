@@ -1,0 +1,99 @@
+# Egress proxy: the only workload in the platform with a route to the internet.
+#   :3128 "sessions" listener <- agent-sessions namespace (Anthropic sign-in hosts only)
+#   :3129 "gateway"  listener <- LiteLLM pods            (model provider APIs only)
+# Implementation: upstream Envoy (pinned by digest), config in envoy.yaml.
+# Allowlists live in envoy.yaml; changing one is a reviewed config change.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: egress-proxy
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: egress-proxy
+  namespace: egress-proxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: egress-proxy }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: egress-proxy }
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101           # envoy user in the upstream image
+        runAsGroup: 101
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+      - name: envoy
+        # envoyproxy/envoy:v1.40.2 (2026-10-27), pinned by digest
+        image: docker.io/envoyproxy/envoy@sha256:8de97e654644827d62afdbf7e1d3dc9fee01a8690d410dd1c63a30dc6b6cecbb
+        command: ["envoy", "-c", "/etc/envoy/envoy.yaml", "--log-level", "warn"]
+        ports:
+        - { name: sessions, containerPort: 3128 }
+        - { name: gateway,  containerPort: 3129 }
+        readinessProbe:
+          tcpSocket: { port: 3128 }
+          periodSeconds: 10
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities: { drop: ["ALL"] }
+        resources:
+          requests: { cpu: 50m,  memory: 64Mi }
+          limits:   { cpu: "1",  memory: 256Mi }
+        volumeMounts:
+        - { name: config, mountPath: /etc/envoy, readOnly: true }
+      volumes:
+      - name: config
+        configMap: { name: egress-proxy-envoy }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: egress-proxy
+  namespace: egress-proxy
+spec:
+  selector: { app.kubernetes.io/name: egress-proxy }
+  ports:
+  - { name: sessions, port: 3128, targetPort: 3128 }
+  - { name: gateway,  port: 3129, targetPort: 3129 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-proxy
+  namespace: egress-proxy
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels: { agent-platform/sessions: "true" }
+    ports: [ { protocol: TCP, port: 3128 } ]
+  - from:
+    - namespaceSelector:
+        matchLabels: { kubernetes.io/metadata.name: llm-gateway }
+      podSelector:
+        matchLabels: { app.kubernetes.io/name: litellm }
+    ports: [ { protocol: TCP, port: 3129 } ]
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels: { kubernetes.io/metadata.name: kube-system }
+      podSelector:
+        matchLabels: { k8s-app: kube-dns }
+    ports: [ { protocol: UDP, port: 53 }, { protocol: TCP, port: 53 } ]
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 100.64.0.0/10]
+    ports: [ { protocol: TCP, port: 443 } ]

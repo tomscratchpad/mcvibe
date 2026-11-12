@@ -1,0 +1,14 @@
+# Never commit credentials or local cluster access
+.env
+.env.*
+*.pem
+*.key
+kubeconfig*
+*.kubeconfig
+.credentials.json
+
+# sbx push/pull temp files
+*.bundle
+
+# Build output
+cli/bin/

@@ -1,0 +1,35 @@
+# One Sandbox per runtime, same image. Used by verify.sh.
+apiVersion: agents.x-k8s.io/v1beta1
+kind: Sandbox
+metadata:
+  name: rt-runc
+spec:
+  podTemplate:
+    spec:
+      containers:
+      - name: main
+        image: localhost:5000/test:1
+---
+apiVersion: agents.x-k8s.io/v1beta1
+kind: Sandbox
+metadata:
+  name: rt-gvisor
+spec:
+  podTemplate:
+    spec:
+      runtimeClassName: gvisor
+      containers:
+      - name: main
+        image: localhost:5000/test:1
+---
+apiVersion: agents.x-k8s.io/v1beta1
+kind: Sandbox
+metadata:
+  name: rt-kata
+spec:
+  podTemplate:
+    spec:
+      runtimeClassName: kata
+      containers:
+      - name: main
+        image: localhost:5000/test:1

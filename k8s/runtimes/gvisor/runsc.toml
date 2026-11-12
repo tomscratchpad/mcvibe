@@ -1,0 +1,6 @@
+# Options for containerd-shim-runsc-v1. Keys under [runsc_config] become runsc flags.
+# Note: runsc only downloads sidecars when gvisor-bin/ is missing; install.sh
+# installs the full, checksum-verified gvisor-bin/ next to runsc, so no runtime fetch.
+[runsc_config]
+  # systrap works without /dev/kvm (portable across VMs / nested virt).
+  platform = "systrap"

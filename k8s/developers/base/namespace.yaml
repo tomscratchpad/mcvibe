@@ -1,0 +1,21 @@
+# A developer's private sandbox namespace.
+#  - agent-platform/sessions=true: same guardrails as agent-sessions (PSA
+#    restricted, secure-sandbox + session-pod VAPs) and the same network
+#    allowances (LiteLLM and egress proxy accept sessions namespaces).
+#  - agent-platform/tenant=developer: opts into the owner VAPs
+#    (../cluster/20-vap-developer-owner.yaml).
+#  - owner annotation: the authenticated username (exactly as the API server
+#    sees it, OIDC prefix included). Platform-set; developers cannot edit it.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sbx-template
+  labels:
+    agent-platform/sessions: "true"
+    agent-platform/tenant: developer
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
+  annotations:
+    agent-platform/owner-username: REPLACED-BY-OVERLAY

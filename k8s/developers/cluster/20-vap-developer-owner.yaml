@@ -1,0 +1,107 @@
+# Owner checks for developer namespaces (label agent-platform/tenant=developer).
+#
+# RBAC (one RoleBinding per developer namespace) already confines each
+# developer to their own namespace. These policies enforce the same rule a
+# second time, from data RBAC cannot see: the namespace's owner annotation
+# (set by the platform at onboarding; developers cannot edit namespaces). So a
+# mistaken RoleBinding (e.g. a group bound into every developer namespace)
+# still does not let one developer reach another's sandbox.
+#
+# Exempt: platform identities (system:*: controllers, garbage collector,
+# namespace deletion, cluster admins) and the IdP group oidc:sandbox-admins.
+# RBAC still applies to them.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: developer-sandboxclaim-owner
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups:   ["extensions.agents.x-k8s.io"]
+      apiVersions: ["v1beta1"]
+      operations:  ["CREATE", "UPDATE", "DELETE"]
+      resources:   ["sandboxclaims"]
+  matchConditions:
+  - name: human-caller
+    expression: >-
+      !request.userInfo.username.startsWith('system:') &&
+      !('oidc:sandbox-admins' in request.userInfo.groups)
+  variables:
+  - name: nsOwner
+    expression: >-
+      has(namespaceObject.metadata.annotations) &&
+      'agent-platform/owner-username' in namespaceObject.metadata.annotations
+        ? namespaceObject.metadata.annotations['agent-platform/owner-username'] : ''
+  - name: claim
+    expression: "request.operation == 'DELETE' ? oldObject : object"
+  - name: claimOwner
+    expression: >-
+      has(variables.claim.metadata.annotations) &&
+      'agent-platform/owner-username' in variables.claim.metadata.annotations
+        ? variables.claim.metadata.annotations['agent-platform/owner-username'] : ''
+  validations:
+  - expression: "variables.nsOwner != '' && variables.nsOwner == request.userInfo.username"
+    messageExpression: "'namespace ' + request.namespace + ' belongs to another developer; ' + request.userInfo.username + ' may only use their own'"
+    reason: Forbidden
+  - expression: "variables.claimOwner == request.userInfo.username"
+    message: "SandboxClaim annotation agent-platform/owner-username must be your own username."
+    reason: Forbidden
+  - expression: >-
+      request.operation != 'UPDATE' ||
+      (has(oldObject.metadata.annotations) && 'agent-platform/owner-username' in oldObject.metadata.annotations &&
+       oldObject.metadata.annotations['agent-platform/owner-username'] == variables.claimOwner)
+    message: "The owner of a SandboxClaim is immutable."
+    reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: developer-sandboxclaim-owner
+spec:
+  policyName: developer-sandboxclaim-owner
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        agent-platform/tenant: developer
+---
+# Interactive access (exec/attach/port-forward are CONNECT operations) only
+# by the namespace owner. This is what remote control rides on: herdr-core and
+# `sbx shell` are pods/exec streams.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: developer-exec-owner
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups:   [""]
+      apiVersions: ["v1"]
+      operations:  ["CONNECT"]
+      resources:   ["pods/exec", "pods/attach", "pods/portforward"]
+  matchConditions:
+  - name: human-caller
+    expression: >-
+      !request.userInfo.username.startsWith('system:') &&
+      !('oidc:sandbox-admins' in request.userInfo.groups)
+  validations:
+  - expression: >-
+      has(namespaceObject.metadata.annotations) &&
+      'agent-platform/owner-username' in namespaceObject.metadata.annotations &&
+      namespaceObject.metadata.annotations['agent-platform/owner-username'] == request.userInfo.username
+    messageExpression: "'only the owner of ' + request.namespace + ' may exec into its sandboxes'"
+    reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: developer-exec-owner
+spec:
+  policyName: developer-exec-owner
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        agent-platform/tenant: developer

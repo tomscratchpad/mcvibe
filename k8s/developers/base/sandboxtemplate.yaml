@@ -1,0 +1,114 @@
+# Same as k8s/policies/40-sandboxtemplate-claude-code.yaml (keep in sync)
+# except the image: devbox (herdr-core for remote control, see image/devbox).
+# Session blueprint for coding-agent sandboxes. Engineers (or the control
+# plane) create SandboxClaims against it; they cannot change its pod spec or
+# network rules.
+#
+# Runtime: gVisor (see README "Runtime choice"). A Kata Containers variant for
+# hardware-virtualization isolation is in examples/.
+#
+# Network (controller-managed NetworkPolicy "<template>-network-policy", L3/L4):
+#  ingress: only from the agent-sandbox Sandbox Router (remote control path).
+#  egress : cluster DNS, LiteLLM gateway :4000 (all model traffic), egress proxy
+#           :3128 (hostname allowlist: Anthropic sign-in only). Nothing else: no
+#           direct internet, no Kubernetes API, no node/metadata IPs, no other pods.
+#           Git/package hosts would be added to the proxy allowlist (or a mirror).
+# Supplying custom rules turns off the controller's "secure default", so pods
+# keep ClusterFirst DNS and can resolve litellm.llm-gateway.svc.
+# Accepted risk: CoreDNS forwards external names upstream, so DNS remains a
+# low-bandwidth exfiltration channel (see README "Known gaps").
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxTemplate
+metadata:
+  name: claude-code
+spec:
+  networkPolicyManagement: Managed
+  networkPolicy:
+    ingress:
+    - from:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: agent-sandbox-system
+        podSelector:
+          matchLabels:
+            app: sandbox-router
+    egress:
+    - to:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: kube-system
+        podSelector:
+          matchLabels:
+            k8s-app: kube-dns
+      ports:
+      - { protocol: UDP, port: 53 }
+      - { protocol: TCP, port: 53 }
+    - to:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: llm-gateway
+        podSelector:
+          matchLabels:
+            app.kubernetes.io/name: litellm
+      ports:
+      - { protocol: TCP, port: 4000 }
+    - to:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: egress-proxy
+        podSelector:
+          matchLabels:
+            app.kubernetes.io/name: egress-proxy
+      ports:
+      - { protocol: TCP, port: 3128 }
+  # Retain: a failed/evicted pod is kept for forensics, not silently replaced
+  # with a fresh one (the session state lives in the pod).
+  failedPodPolicy: Retain
+  envVarsInjectionPolicy: Disallowed
+  volumeClaimTemplatesPolicy: Disallowed
+  podTemplate:
+    spec:
+      runtimeClassName: gvisor
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+      - name: agent
+        image: localhost:5000/devbox:2
+        env:
+        # Routing for every process in the session (Claude Code, git, npm, curl):
+        # model API -> LiteLLM; everything else -> allowlisting egress proxy.
+        - { name: ANTHROPIC_BASE_URL, value: "http://litellm.llm-gateway.svc.cluster.local:4000" }
+        - { name: HTTPS_PROXY, value: "http://egress-proxy.egress-proxy.svc.cluster.local:3128" }
+        - { name: https_proxy, value: "http://egress-proxy.egress-proxy.svc.cluster.local:3128" }
+        - { name: NO_PROXY, value: "localhost,127.0.0.1,.svc,.svc.cluster.local" }
+        - { name: no_proxy, value: "localhost,127.0.0.1,.svc,.svc.cluster.local" }
+        # LLM gateway credential: the developer's LiteLLM virtual key, created at
+        # onboarding by developer.sh (Secret litellm-key in this namespace; the
+        # developer has no RBAC on Secrets). Not optional: no key, no sandbox.
+        - name: LITELLM_API_KEY
+          valueFrom: { secretKeyRef: { name: litellm-key, key: api-key } }
+        - name: SANDBOX_NAME
+          valueFrom: { fieldRef: { fieldPath: metadata.name } }
+        # Claude Code sends these on every model request: the key authenticates to
+        # LiteLLM; the tag attributes spend to this sandbox (attribution only).
+        - name: ANTHROPIC_CUSTOM_HEADERS
+          value: "x-litellm-api-key: Bearer $(LITELLM_API_KEY)\nx-litellm-tags: sandbox:$(SANDBOX_NAME)"
+        volumeMounts:
+        - { name: claude-managed-settings, mountPath: /etc/claude-code, readOnly: true }
+        ports:
+        - { name: runtime, containerPort: 8888 }
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities: { drop: ["ALL"] }
+        resources:
+          requests: { cpu: 500m, memory: 1Gi, ephemeral-storage: 2Gi }
+          limits:   { cpu: "2",  memory: 2Gi, ephemeral-storage: 8Gi }
+      volumes:
+      - name: claude-managed-settings
+        configMap: { name: claude-code-managed-settings }

@@ -1,0 +1,221 @@
+# Envoy egress proxy: the only route from the cluster to the internet.
+#
+# Two listeners, each with its own allowlist; NetworkPolicy decides which
+# namespace can reach which port:
+#   :3128 sessions -> Claude sign-in hosts (model traffic goes via LiteLLM)
+#   :3129 gateway  -> model provider APIs (LiteLLM only)
+#
+# Each connection is checked twice:
+#   1. CONNECT stage (HTTP connection manager): only `CONNECT <allowed-host>:443`.
+#      Anything else (other hosts, IP literals, plain HTTP) gets 403.
+#   2. TLS stage (internal listener + tls_inspector): the tunnel is handed to an
+#      internal listener that reads the TLS ClientHello. It forwards only if the
+#      SNI is also allowlisted, and the upstream is resolved from that SNI.
+#      Without this, "CONNECT claude.ai" + TLS to api.anthropic.com would work,
+#      since all Anthropic hosts share one IP. That would bypass the gateway.
+#
+# TO CHANGE AN ALLOWLIST: edit BOTH the `domains` (with :443) of the listener's
+# "allowed" virtual host AND the `server_names` of its internal listener.
+
+bootstrap_extensions:
+- name: envoy.bootstrap.internal_listener
+  typed_config:
+    "@type": type.googleapis.com/envoy.extensions.bootstrap.internal_listener.v3.InternalListener
+
+overload_manager:   # cap concurrent connections (a session cannot exhaust the proxy)
+  resource_monitors:
+  - name: envoy.resource_monitors.global_downstream_max_connections
+    typed_config:
+      "@type": type.googleapis.com/envoy.extensions.resource_monitors.downstream_connections.v3.DownstreamConnectionsConfig
+      max_active_downstream_connections: 1000
+
+admin:   # local only, for debugging via kubectl exec / port-forward
+  address: { socket_address: { address: 127.0.0.1, port_value: 9901 } }
+
+static_resources:
+  listeners:
+
+  # ---------------------------------------------------------------- sessions
+  - name: sessions
+    address: { socket_address: { address: 0.0.0.0, port_value: 3128 } }
+    filter_chains:
+    - filters:
+      - name: envoy.filters.network.http_connection_manager
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+          stat_prefix: sessions
+          access_log:
+          - name: envoy.access_loggers.stdout
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+              log_format:
+                json_format: &connect_log
+                  ts: "%START_TIME%"
+                  stage: connect
+                  listener: "%DOWNSTREAM_LOCAL_PORT%"
+                  client: "%DOWNSTREAM_REMOTE_ADDRESS_WITHOUT_PORT%"
+                  method: "%REQ(:METHOD)%"
+                  target: "%REQ(:AUTHORITY)%"
+                  status: "%RESPONSE_CODE%"
+                  flags: "%RESPONSE_FLAGS%"
+                  bytes_up: "%BYTES_RECEIVED%"
+                  bytes_down: "%BYTES_SENT%"
+                  duration_ms: "%DURATION%"
+          upgrade_configs: [ { upgrade_type: CONNECT } ]
+          http_filters:
+          - name: envoy.filters.http.router
+            typed_config: { "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router }
+          route_config:
+            virtual_hosts:
+            - name: allowed
+              # api.anthropic.com: SUBSCRIPTION MODE ONLY. Claude Code's sign-in and
+              # start-up checks call it directly (not via ANTHROPIC_BASE_URL). It is
+              # also the model API host, so this lets a malicious agent skip the
+              # gateway using the engineer's own token. Remove it in API-key mode.
+              domains: ["platform.claude.com:443", "claude.ai:443", "claude.com:443", "api.anthropic.com:443"]
+              routes:
+              - match: { connect_matcher: {} }
+                route:
+                  cluster: sni_check_sessions
+                  upgrade_configs: [ { upgrade_type: CONNECT, connect_config: {} } ]
+            - name: deny
+              domains: ["*"]
+              routes:
+              - { match: { connect_matcher: {} }, direct_response: { status: 403 } }
+              - { match: { prefix: "/" },         direct_response: { status: 403 } }
+
+  - name: sni_check_sessions
+    internal_listener: {}
+    listener_filters:
+    - name: envoy.filters.listener.tls_inspector
+      typed_config: { "@type": type.googleapis.com/envoy.extensions.filters.listener.tls_inspector.v3.TlsInspector }
+    filter_chains:
+    - filter_chain_match:
+        server_names: ["platform.claude.com", "claude.ai", "claude.com", "api.anthropic.com"]  # see above
+      filters:
+      - &sni_dfp
+        name: envoy.filters.network.sni_dynamic_forward_proxy
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.sni_dynamic_forward_proxy.v3.FilterConfig
+          port_value: 443
+          dns_cache_config: &dns_cache { name: egress_dns, dns_lookup_family: V4_ONLY }
+      - name: envoy.filters.network.tcp_proxy
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
+          stat_prefix: sessions_allow
+          cluster: dynamic_forward_proxy
+          idle_timeout: 600s
+          access_log: &tls_log_allow
+          - name: envoy.access_loggers.stdout
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+              log_format:
+                json_format:
+                  ts: "%START_TIME%"
+                  stage: tls
+                  decision: allow
+                  sni: "%REQUESTED_SERVER_NAME%"
+                  upstream: "%UPSTREAM_HOST%"
+                  flags: "%RESPONSE_FLAGS%"
+                  bytes_up: "%BYTES_RECEIVED%"
+                  bytes_down: "%BYTES_SENT%"
+                  duration_ms: "%DURATION%"
+    default_filter_chain:   # SNI not allowlisted (or no TLS): log and drop
+      filters:
+      - &sni_deny
+        name: envoy.filters.network.tcp_proxy
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
+          stat_prefix: sni_deny
+          cluster: deny
+          access_log:
+          - name: envoy.access_loggers.stdout
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+              log_format:
+                json_format:
+                  ts: "%START_TIME%"
+                  stage: tls
+                  decision: deny-sni
+                  sni: "%REQUESTED_SERVER_NAME%"
+
+  # ----------------------------------------------------------------- gateway
+  - name: gateway
+    address: { socket_address: { address: 0.0.0.0, port_value: 3129 } }
+    filter_chains:
+    - filters:
+      - name: envoy.filters.network.http_connection_manager
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+          stat_prefix: gateway
+          access_log:
+          - name: envoy.access_loggers.stdout
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+              log_format: { json_format: *connect_log }
+          upgrade_configs: [ { upgrade_type: CONNECT } ]
+          http_filters:
+          - name: envoy.filters.http.router
+            typed_config: { "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router }
+          route_config:
+            virtual_hosts:
+            - name: allowed
+              domains: ["api.anthropic.com:443", "api.openai.com:443"]
+              routes:
+              - match: { connect_matcher: {} }
+                route:
+                  cluster: sni_check_gateway
+                  upgrade_configs: [ { upgrade_type: CONNECT, connect_config: {} } ]
+            - name: deny
+              domains: ["*"]
+              routes:
+              - { match: { connect_matcher: {} }, direct_response: { status: 403 } }
+              - { match: { prefix: "/" },         direct_response: { status: 403 } }
+
+  - name: sni_check_gateway
+    internal_listener: {}
+    listener_filters:
+    - name: envoy.filters.listener.tls_inspector
+      typed_config: { "@type": type.googleapis.com/envoy.extensions.filters.listener.tls_inspector.v3.TlsInspector }
+    filter_chains:
+    - filter_chain_match:
+        server_names: ["api.anthropic.com", "api.openai.com"]
+      filters:
+      - *sni_dfp
+      - name: envoy.filters.network.tcp_proxy
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
+          stat_prefix: gateway_allow
+          cluster: dynamic_forward_proxy
+          idle_timeout: 600s
+          access_log: *tls_log_allow
+    default_filter_chain:
+      filters: [ *sni_deny ]
+
+  clusters:
+  # CONNECT tunnels are handed to the matching internal listener for the SNI check.
+  - name: sni_check_sessions
+    load_assignment:
+      cluster_name: sni_check_sessions
+      endpoints:
+      - lb_endpoints:
+        - endpoint: { address: { envoy_internal_address: { server_listener_name: sni_check_sessions } } }
+  - name: sni_check_gateway
+    load_assignment:
+      cluster_name: sni_check_gateway
+      endpoints:
+      - lb_endpoints:
+        - endpoint: { address: { envoy_internal_address: { server_listener_name: sni_check_gateway } } }
+  # Upstream resolved from the (allowlisted) SNI; DNS is done here, not by clients.
+  - name: dynamic_forward_proxy
+    connect_timeout: 10s
+    lb_policy: CLUSTER_PROVIDED
+    cluster_type:
+      name: envoy.clusters.dynamic_forward_proxy
+      typed_config:
+        "@type": type.googleapis.com/envoy.extensions.clusters.dynamic_forward_proxy.v3.ClusterConfig
+        dns_cache_config: *dns_cache
+  # No endpoints: connections routed here are closed (used for SNI denials).
+  - name: deny
+    connect_timeout: 1s
+    load_assignment: { cluster_name: deny, endpoints: [] }

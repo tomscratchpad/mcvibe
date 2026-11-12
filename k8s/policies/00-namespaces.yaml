@@ -1,0 +1,28 @@
+# Namespaces for agent sessions and the LLM gateway (LiteLLM).
+#
+# agent-sessions: only agent sandboxes live here.
+#  - Pod Security Admission "restricted" is enforced: non-root, no privilege
+#    escalation, drop ALL caps, RuntimeDefault seccomp, no host namespaces/paths.
+#  - The label agent-platform/sessions=true opts the namespace into the
+#    ValidatingAdmissionPolicies in this directory.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agent-sessions
+  labels:
+    agent-platform/sessions: "true"
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
+---
+# llm-gateway: LiteLLM proxy. It is the only component that holds real
+# provider credentials, and the only egress path to model APIs.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: llm-gateway
+  labels:
+    agent-platform/llm-gateway: "true"
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest

@@ -1,0 +1,134 @@
+# Secure Sandbox admission policy.
+# Adapted from upstream agent-sandbox examples/policy/vap/secure-sandbox-policy.yaml
+# (commit 890de53). Changes vs upstream:
+#  - runtimeClassName may be gvisor OR kata (upstream: gvisor only).
+#  - Also validates SandboxTemplates (same .spec.podTemplate path), so a bad
+#    template fails at apply time instead of at claim time inside the controller.
+#  - GKE-specific nodeSelector/toleration rules removed (single k3s node).
+#  - seccompProfile RuntimeDefault required (matches PSA restricted).
+#  - Bound by namespace label instead of "everything except kube-system".
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: secure-sandbox-policy
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups:   ["agents.x-k8s.io"]
+      apiVersions: ["v1beta1"]
+      operations:  ["CREATE", "UPDATE"]
+      resources:   ["sandboxes"]
+    - apiGroups:   ["extensions.agents.x-k8s.io"]
+      apiVersions: ["v1beta1"]
+      operations:  ["CREATE", "UPDATE"]
+      resources:   ["sandboxtemplates"]
+
+  variables:
+    - name: pod
+      expression: "object.spec.podTemplate.spec"
+    - name: allContainers
+      expression: >-
+        object.spec.podTemplate.spec.containers +
+        (has(object.spec.podTemplate.spec.initContainers) ? object.spec.podTemplate.spec.initContainers : []) +
+        (has(object.spec.podTemplate.spec.ephemeralContainers) ? object.spec.podTemplate.spec.ephemeralContainers : [])
+
+  validations:
+    # 1. Runtime isolation: never share the host kernel.
+    - expression: "has(variables.pod.runtimeClassName) && variables.pod.runtimeClassName in ['gvisor', 'kata']"
+      message: "Sandboxes must set runtimeClassName to 'gvisor' or 'kata'."
+
+    # 2. No host network (node services, cloud metadata server).
+    - expression: "!has(variables.pod.hostNetwork) || variables.pod.hostNetwork == false"
+      message: "hostNetwork: true is prohibited."
+
+    # 3. No Kubernetes API credentials inside the sandbox.
+    - expression: "has(variables.pod.automountServiceAccountToken) && variables.pod.automountServiceAccountToken == false"
+      message: "automountServiceAccountToken must be explicitly set to false."
+
+    # 4. No privileged containers.
+    - expression: >-
+        variables.allContainers.all(c,
+           !has(c.securityContext) || !has(c.securityContext.privileged) || c.securityContext.privileged == false)
+      message: "Privileged containers are not allowed."
+
+    # 5. Drop ALL capabilities.
+    - expression: >-
+        variables.allContainers.all(c,
+           has(c.securityContext) && has(c.securityContext.capabilities) &&
+           has(c.securityContext.capabilities.drop) && 'ALL' in c.securityContext.capabilities.drop)
+      message: "All containers must drop 'ALL' capabilities."
+
+    # 6. Resource limits (DoS / runaway resource use).
+    - expression: >-
+        variables.allContainers.all(c,
+           has(c.resources) && has(c.resources.limits) &&
+           has(c.resources.limits.memory) && has(c.resources.limits.cpu))
+      message: "All containers must set cpu and memory limits."
+
+    # 7. Non-root (pod-level or container-level, no container override to false).
+    - expression: >-
+        variables.allContainers.all(c,
+          (has(c.securityContext) && has(c.securityContext.runAsNonRoot) && c.securityContext.runAsNonRoot == true) ||
+          ((!has(c.securityContext) || !has(c.securityContext.runAsNonRoot)) &&
+           has(variables.pod.securityContext) && has(variables.pod.securityContext.runAsNonRoot) &&
+           variables.pod.securityContext.runAsNonRoot == true))
+      message: "Pods or containers must set runAsNonRoot: true."
+
+    # 8. No projected SA tokens / trust bundles / pod certificates.
+    - expression: >-
+        !has(variables.pod.volumes) ||
+        !variables.pod.volumes.exists(v, has(v.projected) && has(v.projected.sources) &&
+           v.projected.sources.exists(s, has(s.serviceAccountToken) || has(s.clusterTrustBundle) || has(s.podCertificate)))
+      message: "Projected service account tokens, ClusterTrustBundles and PodCertificates are prohibited."
+
+    # 9. No hostPath volumes.
+    - expression: "!has(variables.pod.volumes) || !variables.pod.volumes.exists(v, has(v.hostPath))"
+      message: "hostPath volumes are prohibited."
+
+    # 10. No added capabilities.
+    - expression: >-
+        variables.allContainers.all(c,
+           !has(c.securityContext) || !has(c.securityContext.capabilities) ||
+           !has(c.securityContext.capabilities.add) || size(c.securityContext.capabilities.add) == 0)
+      message: "capabilities.add must be empty."
+
+    # 11. No host PID / IPC.
+    - expression: >-
+        (!has(variables.pod.hostPID) || variables.pod.hostPID == false) &&
+        (!has(variables.pod.hostIPC) || variables.pod.hostIPC == false)
+      message: "hostPID and hostIPC must be false."
+
+    # 12. No hostPort.
+    - expression: "variables.allContainers.all(c, !has(c.ports) || c.ports.all(p, !has(p.hostPort)))"
+      message: "hostPort is prohibited."
+
+    # 13. No sysctls.
+    - expression: >-
+        !has(variables.pod.securityContext) || !has(variables.pod.securityContext.sysctls) ||
+        size(variables.pod.securityContext.sysctls) == 0
+      message: "Custom sysctls are prohibited."
+
+    # 14. procMount must stay Default.
+    - expression: >-
+        variables.allContainers.all(c,
+           !has(c.securityContext) || !has(c.securityContext.procMount) || c.securityContext.procMount == 'Default')
+      message: "procMount must be 'Default'."
+
+    # 15. RuntimeDefault seccomp (pod-level).
+    - expression: >-
+        has(variables.pod.securityContext) && has(variables.pod.securityContext.seccompProfile) &&
+        variables.pod.securityContext.seccompProfile.type == 'RuntimeDefault'
+      message: "Pod securityContext.seccompProfile.type must be RuntimeDefault."
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: secure-sandbox-binding
+spec:
+  policyName: secure-sandbox-policy
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        agent-platform/sessions: "true"

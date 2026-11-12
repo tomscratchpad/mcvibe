@@ -1,0 +1,13 @@
+# SandboxClaims must reference a warm pool (agent-sandbox v1.0.x).
+# replicas: 0 on the demo node, so claims cold-start from the template
+# (gVisor: ~0.6s with a cached image). Raise replicas in production to
+# hide image pull + start latency.
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxWarmPool
+metadata:
+  name: claude-code
+  namespace: agent-sessions
+spec:
+  replicas: 0
+  sandboxTemplateRef:
+    name: claude-code
