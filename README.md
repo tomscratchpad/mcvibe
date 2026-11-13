@@ -1,11 +1,11 @@
-# Remote Coding Agent Platform: prototype
+# Remote Coding Agent Platform: Prototype
 
 Disposable, isolated sandboxes on Kubernetes where engineers run **Claude Code**
 remotely: several in parallel, still running when the laptop sleeps, controlled
 from the **Herdr desktop and mobile apps**. The agent is treated as **compromised by
 default**: the platform limits what it can **reach**, **spend** and **take out**.
 
-> **Status:** a working single-node slice on k3s. Create a sandbox → the agent
+> **Status:** a working single-node kubernetes cluster (k3s). Create a sandbox → the agent
 > works on your code → steer it remotely → pull its work back → destroy the
 > sandbox. Every control marked **✅ demo** below is enforced on the cluster
 > and covered by a test suite.
@@ -25,8 +25,6 @@ default**: the platform limits what it can **reach**, **spend** and **take out**
 
 <details>
 <summary><b>📄 Exercise brief</b> (original text, unchanged)</summary>
-
-Exercise:
 
 # **Remote Coding Agent Platform**
 
@@ -109,21 +107,36 @@ flowchart TB
   pod -. "sign-in only" .-> envoy
   envoy --> anthropic
 ```
-
-- **One sandbox = one pod** from a platform-owned template. It runs under **gVisor**
-  (user-space kernel), in the engineer's **own namespace**, and expires after a TTL.
-- **Remote control goes through the Kubernetes exec API only.** No SSH, no open
-  port, no extra credential. Every connection is authenticated, checked against
-  RBAC *and* an owner admission policy, and audited.
-- **The Herdr app** shows each sandbox as a machine: terminals, agents, follow-up
-  prompts. Sessions keep running in the sandbox when the laptop disconnects.
-- **Model traffic goes through LiteLLM**, which authenticates each developer,
-  enforces budgets and rate limits, and attributes spend per developer and sandbox.
-- **The only internet route is Envoy**, which allows a handful of Anthropic
+- **Sandbox:** [Kubernetes Agent-Sandbox](https://github.com/kubernetes-sigs/agent-sandbox).
+  Several local, remote, free or SaaS solutions exists and some are listed at the bottom,
+  including some embedded local sandboxed containers bundled within Claude Code and OpenAI Codex.
+  [nono](https://nono.sh/) would be my preferred choice for a local only setup (kernel and credentials isolation,
+  audit, filtering), but since the exercise requires a remote environment, this exercise implements
+  the k8s Agent-Sandbox which is maintained by the k8s community and provides similar capabilities. 
+  - **One sandbox = one pod** from a platform-owned template. It runs under **gVisor**
+    (user-space kernel), in the engineer's **own namespace**, and expires after a TTL.
+  - **Remote control goes through the Kubernetes exec API only.** No SSH, no open
+    port, no extra credential. Every connection is authenticated, checked against
+     RBAC *and* an owner admission policy, and audited.
+- **User:** [Herdr](https://herdr.dev/).
+  - **The Herdr app** shows each sandbox as a machine: terminals, agents, follow-up
+    prompts. Sessions keep running in the sandbox when the laptop disconnects.
+  - **Mobile:** Herdr provides a [mobile app](https://herdr.dev/mobile/) that connects one machine,
+    and offers the others it knows about. Connection can be established over [Tailscale](https://tailscale.com/).
+  - **Notifications:** Agents report their status to Herdr through [OSC 7501](https://mitchellh.com/writing/program-status-osc7501)
+    Program Status Protocol.
+- **Audit and Policies:** [LiteLLM](https://www.litellm.ai/)
+  **Model traffic goes through LiteLLM**, which authenticates each developer, audit,
+  enforces budgets and rate limits, and attributes spend per developer and sandbox, centralize MCP accesses and inject API credentials.
+  [RTK](https://github.com/rtk-ai/rtk) is installed in the sandboxes to reduce the token spent.
+- **Network isolation:** [Envoy](https://www.envoyproxy.io/)
+  The only internet route is Envoy**, which allows a handful of Anthropic
   hostnames, checked by CONNECT target *and* TLS SNI. GitHub, npm and everything
-  else are blocked.
-- **Code moves through `sbx`:** in as a git bundle at create, out into a local
-  branch at delete. The sandbox holds no git credentials.
+  else are blocked. A production implementation should probably implement a cache like Artifactory to download dependencies, the egress
+  restrictions in this demo would be painful to work with :).
+- **Lifecycle: CLI called `sbx`**
+  This CLI creates and destroy sandboxed environment, add them to Herdr UI as machines. The code is pulled and pushed to/from the container by sbx:
+  it moves in as a git bundle at sbx create, out into a local branch at sbx delete. The sandbox holds no git credentials.
 
 ---
 
@@ -343,11 +356,13 @@ node runtime install, secret generation, gateway keys.
 ### Other sandbox options considered
 
 The platform's value is in the policies around the sandbox (identity, egress,
-gateway, permissions), so the runtime is swappable:
+gateway, permissions), so the runtime is swappable.
+
+Many local, remote, free or SaaS solutions exists, an [exhaustive list can be found here](https://githSandoxesub.com/Awesome-llms-labs/awesome-ai-sandboxes/).
 
 | Option | Fit |
 |---|---|
 | **agent-sandbox on Kubernetes** (chosen) | Self-hosted, Kubernetes-native identity and policy, gVisor or Kata, scales to a team |
-| **nono** (local) | Kernel-enforced sandbox for agents on the engineer's own machine; good for local runs, not for remote sessions |
+| **nono** (local) | Kernel-enforced sandbox for agents on the engineer's own machine; local only. Keep credentials out of the sandbox by injecting them at the proxy|
 | **Docker Sandboxes** | MicroVM per agent on a workstation; simple, but local and per-machine. Remote SaaS option is possible if budget allows |
-| **Cloudflare Sandboxes**, E2B, Modal, Daytona | Other managed remote sandboxes with an API and different levels of isolation |
+| **Others**: Cloudflare Sandboxes, Modal, Daytona, etc | Other managed remote sandboxes with an API and different levels of isolation |
